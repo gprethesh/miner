@@ -1,20 +1,21 @@
 import json
-import asyncio
-import config  # Make sure config.py is in the same directory or properly referenced
+import config.config as config
+import logging
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s:%(levelname)s - %(message)s"
+)
 
 
 async def request_job_file(websocket, message_type):
     try:
-        # Create a message for requesting a file
         message = {
             "type": message_type,
             "wallet_address": config.WALLET_ADDRESS,
         }
-
-        # Send the request message
+        logging.info("Requesting a job from Inode..")
         await websocket.send(json.dumps(message))
 
-        # Wait for a response
         response = await websocket.recv()
         return response
 

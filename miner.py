@@ -1,39 +1,68 @@
-import socket
 import json
-import config
+import config.config as config
 import websockets
 import asyncio
+import logging
+import argparse
 
-from train_and_contribute import train_and_contribute
-from jobDownload import download_zip
-from getJob import get_first_zip_in_job
-from deleteJob import delete_jobid_folder_and_file
-from getGradient import find_gradient
-from sendGradient import send_file_via_websocket
-from requestJob import request_job_file
+from training.train_and_contribute import train_and_contribute
+from data_handling.jobDownload import download_zip
+from job_management.getJob import get_first_zip_in_job
+from job_management.deleteJob import delete_jobid_folder_and_file
+from utils.getGradient import find_gradient
+from job_management.sendGradient import send_file_via_websocket
+from job_management.requestJob import request_job_file
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s:%(levelname)s - %(message)s"
+)
 
 
 class MessageType:
     GRADIENT = "gradient"
     REQUESTFILE = "requestFile"
     DOWNLOADFILE = "downloadFile"
+    PING = "ping"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Miner Configuration")
+    parser.add_argument(
+        "--MINER_POOL_IP", required=True, help="IP address of the miner pool"
+    )
+    parser.add_argument(
+        "--MINER_POOL_PORT", required=True, type=int, help="Port of the miner pool"
+    )
+    parser.add_argument(
+        "--WALLET_ADDRESS", required=True, help="Wallet address for the miner"
+    )
+    return parser.parse_args()
 
 
 async def ping_server(message_type, find_gradient, download_zip):
-    uri = "ws://127.0.0.1:5500"
+    uri = f"ws://{config.MINER_POOL_IP}:{config.MINER_POOL_PORT}"
     try:
         async with websockets.connect(uri) as websocket:
             # Send a ping message
-            await websocket.send("hello")
+
+            message = {
+                "type": MessageType.PING,
+            }
+
+            await websocket.send(json.dumps(message))
 
             # Wait for a response
             response = await websocket.recv()
-            print("Received from server:", response)
+            if response.startswith("SUCCESS") or response.startswith("ERROR"):
+                logging.info("Pool response: %s", response)
 
             request_response = await request_job_file(
                 websocket, MessageType.REQUESTFILE
             )
-            print("Server response :", request_response)
+            if request_response.startswith("SUCCESS") or request_response.startswith(
+                "ERROR"
+            ):
+                logging.info("Pool response: %s", request_response)
 
             try:
                 # Parse the JSON response into a Python dictionary
@@ -55,77 +84,85 @@ async def ping_server(message_type, find_gradient, download_zip):
                     if value:
                         folder, zip_file, file_name = get_first_zip_in_job("job")
                         if folder and zip_file:
-                            print(
-                                f"Oldest folder: {folder}, First zip file: {zip_file}"
-                            )
                             miner_id = file_name
                             path = f"./job/{folder}/{zip_file}"
-                            miner_wallet_address = config.WALLET_ADDRESS
                             gradient = train_and_contribute(miner_id, path, folder)
-                            print("Gradient", gradient)
+                            logging.info("Gradient %s", gradient)
                             delete_jobid_folder_and_file("job", folder, zip_file)
                         else:
-                            print("No folder or zip file found to Train")
+                            logging.info("No folder or zip file found to Train")
                 else:
-                    print("Error: Response data is not a valid JSON object.")
+                    logging.info("Error: Response data is not a valid JSON object.")
 
             except json.JSONDecodeError:
-                print("Error: Could not decode JSON response.")
+                logging.error("Error: Could not decode JSON response.")
             except TypeError:
-                print("TypeError: The response is not in the expected format.")
+                logging.error("TypeError: The response is not in the expected format.")
             except AttributeError:
-                print("AttributeError: Unexpected data type.")
+                logging.error("AttributeError: Unexpected data type.")
 
             fld, fil, just_name = find_gradient("Destination")
             if fld and fil:
-                print(f"Oldest folder: {fld}, First .pth file: {fil}")
                 file_path = f"./Destination/{fld}/{fil}"
                 if message_type == MessageType.GRADIENT:
                     file_response = await send_file_via_websocket(
                         websocket, file_path, MessageType.GRADIENT, just_name, fld
                     )
-                    print("Called to send the gradient")
-                    print("Server response after file send:", file_response)
+
+                    if file_response.startswith("SUCCESS") or file_response.startswith(
+                        "ERROR"
+                    ):
+                        logging.info("Pool response: %s", file_response)
+
                     if file_response:
                         delete_jobid_folder_and_file("Destination", fld, fil)
                     else:
-                        print("Gradient failed to be sent")
+                        logging.info("Gradient failed to be sent")
             else:
-                print("No gradient file found to send.")
+                logging.info("No gradient file found to send.")
 
     except websockets.ConnectionClosedError:
-        print("ConnectionClosedError: The websocket connection is closed unexpectedly.")
+        logging.error(
+            "ConnectionClosedError: The websocket connection is closed unexpectedly."
+        )
     except websockets.WebSocketException as e:
-        print(
-            f"WebSocketException: An error occurred with the websocket connection. Details: {e}"
+        logging.error(
+            "WebSocketException: An error occurred with the websocket connection. Details: %s",
+            e,
         )
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        logging.error("An unexpected error occurred: %s", e)
 
 
 # Run the client
 
 
 async def start_server(find_gradient, download_zip):
-    print(" Starting Miner...")
+    logging.info("Starting Miner...")
     try:
         while True:
             try:
                 await ping_server(MessageType.GRADIENT, find_gradient, download_zip)
             except Exception as e:
-                print(" Miner closed due to an error:", e)
+                logging.error("Miner closed due to an error: %s", e, exc_info=True)
                 break
-            await asyncio.sleep(60)
+            await asyncio.sleep(config.INTERVAL)
     except KeyboardInterrupt:
-        print(" Miner shutdown initiated by user.")
+        logging.info("Miner shutdown initiated by user.")
     finally:
-        print(" Shutting down Miner...")
+        logging.info("Shutting down Miner...")
 
 
 # Start the loop
 try:
+    args = parse_args()
+
+    # Override config values with command-line arguments
+    config.MINER_POOL_IP = args.MINER_POOL_IP
+    config.MINER_POOL_PORT = args.MINER_POOL_PORT
+    config.WALLET_ADDRESS = args.WALLET_ADDRESS
     asyncio.get_event_loop().run_until_complete(
         start_server(find_gradient, download_zip)
     )
 except KeyboardInterrupt:
-    print(" Miner shutdown process complete.")
+    logging.info("Miner shutdown process complete.")

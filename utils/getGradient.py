@@ -1,16 +1,13 @@
 import os
-import time
 
 
 def find_gradient(destination):
     try:
         destination_path = os.path.join(os.getcwd(), destination)
 
-        # Check if the 'destination' folder exists
         if not os.path.exists(destination_path):
             raise FileNotFoundError(f"The '{destination}' folder does not exist.")
 
-        # Get list of folders in 'destination'
         contents = [
             item
             for item in os.listdir(destination_path)
@@ -21,11 +18,9 @@ def find_gradient(destination):
                 f"The '{destination}' folder is empty or contains no folders."
             )
 
-        # Sort folders based on creation (modification) time
         contents.sort(key=lambda x: os.path.getmtime(os.path.join(destination_path, x)))
         oldest_folder = contents[0]
 
-        # List the contents of the oldest folder and find the first .pth file
         oldest_folder_path = os.path.join(destination_path, oldest_folder)
         folder_contents = os.listdir(oldest_folder_path)
         pth_file = None
